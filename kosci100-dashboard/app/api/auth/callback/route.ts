@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");
   const who = parseWho(req.nextUrl.searchParams.get("state"));
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL as string;
+  const baseUrl = req.nextUrl.origin || (process.env.NEXT_PUBLIC_BASE_URL as string);
 
   if (!code) {
     return NextResponse.redirect(`${baseUrl}/?error=no_code`);
