@@ -1,8 +1,8 @@
 import { PlanSession } from "./plan";
 
-// Strava sport_type values that count as a match for each of our session
-// types. Stairmaster has no reliable Strava category, so it's left out —
-// those stay manual-only.
+// Strava sport_type values that count as a match for each session type.
+// Stairmaster and Strength (gym) are now trackable since both are logged
+// as specific Strava activity types.
 const AUTO_DETECT_TYPES: Partial<Record<string, string[]>> = {
   run: ["Run", "TrailRun"],
   long: ["Run", "TrailRun"],
@@ -10,6 +10,7 @@ const AUTO_DETECT_TYPES: Partial<Record<string, string[]>> = {
   swim: ["Swim"],
   gymL: ["WeightTraining"],
   gymU: ["WeightTraining"],
+  stair: ["StairStepper"],
   race: ["Run", "TrailRun"],
 };
 
@@ -20,8 +21,6 @@ export interface StravaActivity {
   start_date_local: string; // ISO, e.g. 2026-08-24T16:57:23Z
   distance: number; // metres
   moving_time: number; // seconds
-  total_elevation_gain?: number; // metres
-  average_heartrate?: number;
 }
 
 export interface MatchResult {
@@ -34,7 +33,10 @@ export function matchSession(
   session: PlanSession,
   activities: StravaActivity[]
 ): MatchResult {
-  if (session.type === "rest" || session.type === "stair" || session.type === "other") {
+  if (session.type === "rest") {
+    return { detected: true, autoDetectable: false };
+  }
+  if (session.type === "other") {
     return { detected: false, autoDetectable: false };
   }
 
@@ -70,4 +72,34 @@ export function matchSession(
     };
   }
   return { detected: true, autoDetectable: true, matched: dayActivities[0] };
+}
+
+/**
+ * Finds Strava activities that don't correspond to any planned session —
+ * bonus/unplanned training. An activity counts as "claimed" if it's the
+ * `matched` activity for some session, or if it falls on a date+sport-type
+ * combination that a session already consumed.
+ */
+export interface BonusActivity {
+  activity: StravaActivity;
+  date: string;
+}
+
+export function findBonusActivities(
+  sessions: PlanSession[],
+  activities: StravaActivity[]
+): BonusActivity[] {
+  const claimedIds = new Set<number>();
+  sessions.forEach((session) => {
+    const result = matchSession(session, activities);
+    if (result.matched) claimedIds.add(result.matched.id);
+  });
+
+  const matchableSportTypes = new Set(
+    Object.values(AUTO_DETECT_TYPES).flat()
+  );
+
+  return activities
+    .filter((a) => !claimedIds.has(a.id) && matchableSportTypes.has(a.sport_type))
+    .map((a) => ({ activity: a, date: (a.start_date_local || "").slice(0, 10) }));
 }

@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const who = parseWho(req.nextUrl.searchParams.get("who"));
   const clientId = process.env.STRAVA_CLIENT_ID;
-  const baseUrl = req.nextUrl.origin || process.env.NEXT_PUBLIC_BASE_URL;
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
   const redirectUri = `${baseUrl}/api/auth/callback`;
   const scope = "read,activity:read_all";
 

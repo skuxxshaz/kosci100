@@ -1,141 +1,18 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { PLAN, POINTS, PlanPhase, PlanSession, PlanWeek, sessionTitle, weeklyRunKmTarget } from "@/lib/plan";
+import { PLAN, POINTS, PlanPhase, PlanSession, GYM_SESSIONS } from "@/lib/plan";
 import { OWEN_PLAN } from "@/lib/owen-plan";
-import { matchSession, StravaActivity, MatchResult } from "@/lib/match";
+import { matchSession, findBonusActivities, StravaActivity, MatchResult, BonusActivity } from "@/lib/match";
 import { BINGO_SQUARES, FREE_INDEX, countCompletedLines, defaultTicks } from "@/lib/bingo";
 
 const TAG_COLORS: Record<string, string> = {
-  run: "#b83a35", long: "#b8541f", bike: "#b83a35", stair: "#b8541f",
-  swim: "#b83a35", gymL: "#b8541f", gymU: "#b8541f", rest: "#5c5c40",
-  other: "#5c5c40", race: "#b83a35",
+  run: "#52572a", long: "#8a6d16", bike: "#b5476f", stair: "#7a5c3a",
+  swim: "#b5476f", gymL: "#8a5a26", gymU: "#8a5a26", rest: "#75746c",
+  other: "#75746c", race: "#8a6d16",
 };
 
 const MANUAL_KEY = "kosci100-manual-checks";
-
-function InfoTooltip({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <span className="info-tip-wrap">
-      <button
-        type="button"
-        className="info-tip-btn"
-        aria-label="Session details"
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen((v) => !v);
-        }}
-        onBlur={() => setOpen(false)}
-      >
-        i
-      </button>
-      {open && (
-        <span className="info-tip-bubble" onClick={(e) => e.stopPropagation()}>
-          {text}
-        </span>
-      )}
-    </span>
-  );
-}
-
-function ConfidenceRadar({
-  data,
-  color,
-  size = 200,
-}: {
-  data: { axis: string; pct: number }[];
-  color: string;
-  size?: number;
-}) {
-  const cx = size / 2;
-  const cy = size / 2;
-  const maxR = size / 2 - 34;
-  const n = data.length;
-
-  function point(i: number, r: number) {
-    const angle = (Math.PI / 180) * (i * (360 / n) - 90);
-    return [cx + r * Math.cos(angle), cy + r * Math.sin(angle)];
-  }
-
-  const rings = [0.2, 0.4, 0.6, 0.8, 1];
-  const dataPoints = data.map((d, i) => point(i, (d.pct / 100) * maxR));
-  const polygon = dataPoints.map((p) => p.join(",")).join(" ");
-
-  return (
-    <svg
-      viewBox={`-50 -50 ${size + 100} ${size + 100}`}
-      width="100%"
-      style={{ maxWidth: size, display: "block", margin: "0 auto", overflow: "visible" }}
-    >
-      {rings.map((r, i) => {
-        const ringPts = data.map((_, di) => point(di, r * maxR).join(",")).join(" ");
-        return <polygon key={i} points={ringPts} fill="none" stroke="var(--line)" strokeWidth={1} />;
-      })}
-      {data.map((_, i) => {
-        const [x, y] = point(i, maxR);
-        return <line key={i} x1={cx} y1={cy} x2={x} y2={y} stroke="var(--line)" strokeWidth={1} />;
-      })}
-      <polygon points={polygon} fill={color} fillOpacity={0.28} stroke={color} strokeWidth={2} />
-      {dataPoints.map((p, i) => (
-        <circle key={i} cx={p[0]} cy={p[1]} r={3} fill={color} />
-      ))}
-      {data.map((d, i) => {
-        const [lx, ly] = point(i, maxR + 16);
-        const dx = lx - cx;
-        const anchor = dx > 6 ? "start" : dx < -6 ? "end" : "middle";
-        return (
-          <text
-            key={i}
-            x={lx}
-            y={ly}
-            textAnchor={anchor}
-            dominantBaseline="middle"
-            fontSize={10}
-            fontFamily="'JetBrains Mono', monospace"
-            fill="var(--text-dim)"
-          >
-            {d.axis}
-          </text>
-        );
-      })}
-    </svg>
-  );
-}
-
-function MetricTile({
-  label,
-  mineVal,
-  minePct,
-  owenVal,
-  owenPct,
-}: {
-  label: string;
-  mineVal: string;
-  minePct: number;
-  owenVal: string;
-  owenPct: number;
-}) {
-  const mineLead = minePct >= owenPct;
-  const owenLead = owenPct >= minePct;
-  return (
-    <div className="metric-tile">
-      <div className="metric-tile-label">{label}</div>
-      <div className={`metric-tile-row ${mineLead ? "lead" : ""}`}>
-        <div className="metric-tile-name">Shannon</div>
-        <div className="metric-bar-track"><div className="metric-bar-fill mine" style={{ width: `${minePct}%` }} /></div>
-        <div className="metric-tile-val">{mineVal}</div>
-      </div>
-      <div className={`metric-tile-row ${owenLead ? "lead" : ""}`}>
-        <div className="metric-tile-name">Owen</div>
-        <div className="metric-bar-track"><div className="metric-bar-fill owen" style={{ width: `${owenPct}%` }} /></div>
-        <div className="metric-tile-val">{owenVal}</div>
-      </div>
-    </div>
-  );
-}
-
-
 
 function loadManual(): Record<string, boolean> {
   if (typeof window === "undefined") return {};
@@ -180,12 +57,20 @@ function usePersonStrava(who: "mine" | "owen") {
   return { activities, authState };
 }
 
+function distanceHeading(session: PlanSession): string | null {
+  if (session.targetKm) {
+    return session.targetKm >= 10 ? `${Math.round(session.targetKm)}KM` : `${session.targetKm}KM`;
+  }
+  if (session.targetMin) return `${session.targetMin}MIN`;
+  return null;
+}
+
 export default function Page() {
   const mine = usePersonStrava("mine");
   const owen = usePersonStrava("owen");
 
   const [manual, setManual] = useState<Record<string, boolean>>({});
-  const [activeTab, setActiveTab] = useState<"myplan" | "weekly" | "owen" | "bingo" | "settings">("weekly");
+  const [activeTab, setActiveTab] = useState<"myplan" | "weekly" | "owen" | "bingo">("myplan");
   const [myActivePhase, setMyActivePhase] = useState(PLAN[0].id);
   const [owenActivePhase, setOwenActivePhase] = useState(OWEN_PLAN[0].id);
 
@@ -237,12 +122,7 @@ export default function Page() {
     }
   }
 
-  // ---- generic plan matching, reused for both plans ----
-  function buildResults(
-    plan: PlanPhase[],
-    who: "mine" | "owen",
-    activities: StravaActivity[] | null
-  ) {
+  function buildResults(plan: PlanPhase[], who: "mine" | "owen", activities: StravaActivity[] | null) {
     const acts = activities || [];
     const flat: { session: PlanSession; weekId: string; match: MatchResult; key: string }[] = [];
     plan.forEach((phase) => {
@@ -261,6 +141,15 @@ export default function Page() {
   const myResults = useMemo(() => buildResults(PLAN, "mine", mine.activities), [mine.activities, manual]);
   const owenResults = useMemo(() => buildResults(OWEN_PLAN, "owen", owen.activities), [owen.activities, manual]);
 
+  const myBonus = useMemo(() => {
+    const allSessions = PLAN.flatMap((p) => p.weeks.flatMap((w) => w.sessions));
+    return findBonusActivities(allSessions, mine.activities || []);
+  }, [mine.activities]);
+  const owenBonus = useMemo(() => {
+    const allSessions = OWEN_PLAN.flatMap((p) => p.weeks.flatMap((w) => w.sessions));
+    return findBonusActivities(allSessions, owen.activities || []);
+  }, [owen.activities]);
+
   function totalsFor(results: ReturnType<typeof buildResults>) {
     let total = 0, done = 0, totalPoints = 0, earnedPoints = 0;
     results.forEach(({ session, match }) => {
@@ -276,128 +165,6 @@ export default function Page() {
 
   const myTotals = useMemo(() => totalsFor(myResults), [myResults]);
   const owenTotals = useMemo(() => totalsFor(owenResults), [owenResults]);
-
-  const RADAR_GROUPS: { axis: string; types: string[] }[] = [
-    { axis: "Easy runs", types: ["run"] },
-    { axis: "Long runs", types: ["long"] },
-    { axis: "Vert/stairs", types: ["stair"] },
-    { axis: "Strength", types: ["gymL", "gymU"] },
-    { axis: "Cross-train", types: ["bike", "swim"] },
-  ];
-
-  function radarFor(results: ReturnType<typeof buildResults>) {
-    return RADAR_GROUPS.map(({ axis, types }) => {
-      let total = 0, done = 0;
-      results.forEach(({ session, match }) => {
-        if (types.includes(session.type)) {
-          total++;
-          if (match.detected) done++;
-        }
-      });
-      return { axis, pct: total ? Math.round((done / total) * 100) : 0 };
-    });
-  }
-
-  const myRadar = useMemo(() => radarFor(myResults), [myResults]);
-  const owenRadar = useMemo(() => radarFor(owenResults), [owenResults]);
-  const myConfidence = useMemo(() => Math.round(myRadar.reduce((s, a) => s + a.pct, 0) / myRadar.length), [myRadar]);
-  const owenConfidence = useMemo(() => Math.round(owenRadar.reduce((s, a) => s + a.pct, 0) / owenRadar.length), [owenRadar]);
-
-  function fitnessMetricsFor(activities: StravaActivity[] | null) {
-    const acts = activities || [];
-    const runs = acts.filter((a) => a.sport_type === "Run" || a.sport_type === "TrailRun");
-    const now = Date.now();
-    const day = 24 * 60 * 60 * 1000;
-    const last7 = runs.filter((a) => now - new Date(a.start_date_local).getTime() <= 7 * day);
-    const last14 = runs.filter((a) => now - new Date(a.start_date_local).getTime() <= 14 * day);
-    const weeklyKm = last7.reduce((s, a) => s + (a.distance || 0), 0) / 1000;
-    const elevGain14 = last14.reduce((s, a) => s + (a.total_elevation_gain || 0), 0);
-    const longestKm = runs.reduce((m, a) => Math.max(m, (a.distance || 0) / 1000), 0);
-    const totalKm = runs.reduce((s, a) => s + (a.distance || 0), 0) / 1000;
-    const totalMin = runs.reduce((s, a) => s + (a.moving_time || 0), 0) / 60;
-    const avgPace = totalKm > 0 ? totalMin / totalKm : null;
-    return { weeklyKm, elevGain14, longestKm, avgPace, hasData: runs.length > 0 };
-  }
-
-  const myFitness = useMemo(() => fitnessMetricsFor(mine.activities), [mine.activities]);
-  const owenFitness = useMemo(() => fitnessMetricsFor(owen.activities), [owen.activities]);
-
-  // ---- responsive weekly insight, built from live plan + Strava data ----
-  function buildWeeklyInsight(
-    name: string,
-    plan: PlanPhase[],
-    activities: StravaActivity[] | null,
-    weekTotals: { label: string; dateRange: string; done: number; total: number; points: number }[],
-    totals: { pct: number; done: number; total: number },
-    streakCount: number,
-    fitness: ReturnType<typeof fitnessMetricsFor>
-  ) {
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const flatWeeks: PlanWeek[] = [];
-    plan.forEach((phase) => phase.weeks.forEach((w) => flatWeeks.push(w)));
-
-    let weekIdx = flatWeeks.findIndex((w) => {
-      const dates = w.sessions.map((s) => s.date).sort();
-      return dates.length > 0 && todayStr <= dates[dates.length - 1];
-    });
-    if (weekIdx === -1) weekIdx = flatWeeks.length - 1;
-    const currentWeek = flatWeeks[weekIdx];
-    const wt = weekTotals[weekIdx];
-    const kmTarget = currentWeek ? weeklyRunKmTarget(currentWeek) : 0;
-
-    const acts = activities || [];
-    const weekDates = new Set(currentWeek ? currentWeek.sessions.map((s) => s.date) : []);
-    const weekRuns = acts.filter(
-      (a) => (a.sport_type === "Run" || a.sport_type === "TrailRun") && weekDates.has((a.start_date_local || "").slice(0, 10))
-    );
-    const weekKm = weekRuns.reduce((s, a) => s + (a.distance || 0), 0) / 1000;
-    const pctOfTarget = kmTarget > 0 ? Math.round((weekKm / kmTarget) * 100) : null;
-
-    const parts: string[] = [];
-    parts.push(
-      `${name} is ${totals.pct}% through the full plan${streakCount > 0 ? `, on a ${streakCount}-week streak of fully completed weeks` : ""}.`
-    );
-    if (wt) parts.push(`This week (${wt.dateRange}): ${wt.done}/${wt.total} sessions confirmed so far.`);
-    if (kmTarget > 0) {
-      if (weekKm > 0) {
-        const cmp =
-          pctOfTarget !== null && pctOfTarget >= 90
-            ? "right on pace for"
-            : pctOfTarget !== null && pctOfTarget >= 60
-            ? "tracking a bit behind"
-            : "well behind";
-        parts.push(`${weekKm.toFixed(1)}km logged on Strava against a ${kmTarget}km running target this week — ${cmp} target.`);
-      } else {
-        parts.push(`No running logged yet against this week's ${kmTarget}km target.`);
-      }
-    }
-    if (fitness.hasData) {
-      parts.push(
-        `Longest run to date is ${fitness.longestKm.toFixed(1)}km at an average pace of ${
-          fitness.avgPace ? fitness.avgPace.toFixed(2) : "—"
-        }/km across the last 14 days.`
-      );
-    } else {
-      parts.push(`No Strava running data synced yet for this read — connect Strava for a live weekly summary.`);
-    }
-    return parts.join(" ");
-  }
-
-
-  // Directional estimate only, not a scientific prediction — weighted blend of plan
-  // adherence, category balance, and Strava-reported volume/vert/pace vs rough targets.
-  function likelihoodFor(pct: number, confidence: number, fitness: ReturnType<typeof fitnessMetricsFor>) {
-    const clamp = (n: number) => Math.max(0, Math.min(100, n));
-    const volScore = clamp((fitness.weeklyKm / 55) * 100);
-    const elevScore = clamp((fitness.elevGain14 / 1200) * 100);
-    const longScore = clamp((fitness.longestKm / 35) * 100);
-    const paceScore = fitness.avgPace ? clamp((7.5 / fitness.avgPace) * 100) : 50;
-    const fitnessScore = fitness.hasData ? (volScore + elevScore + longScore + paceScore) / 4 : 50;
-    return Math.round(pct * 0.4 + confidence * 0.2 + fitnessScore * 0.4);
-  }
-
-  const myLikelihood = useMemo(() => likelihoodFor(myTotals.pct, myConfidence, myFitness), [myTotals.pct, myConfidence, myFitness]);
-  const owenLikelihood = useMemo(() => likelihoodFor(owenTotals.pct, owenConfidence, owenFitness), [owenTotals.pct, owenConfidence, owenFitness]);
 
   const daysToRace = useMemo(() => {
     const race = new Date("2026-11-27T00:00:00");
@@ -423,7 +190,6 @@ export default function Page() {
   }
 
   const myWeekTotals = useMemo(() => weekTotalsFor(PLAN, myResults), [myResults]);
-  const owenWeekTotals = useMemo(() => weekTotalsFor(OWEN_PLAN, owenResults), [owenResults]);
 
   const streak = useMemo(() => {
     let s = 0;
@@ -435,26 +201,6 @@ export default function Page() {
   }, [myWeekTotals]);
   const weeksDone = myWeekTotals.filter((w) => w.total > 0 && w.done === w.total).length;
 
-  const owenStreak = useMemo(() => {
-    let s = 0;
-    for (const w of owenWeekTotals) {
-      if (w.total > 0 && w.done === w.total) s++;
-      else break;
-    }
-    return s;
-  }, [owenWeekTotals]);
-  const owenWeeksDone = owenWeekTotals.filter((w) => w.total > 0 && w.done === w.total).length;
-
-  const myInsight = useMemo(
-    () => buildWeeklyInsight("Shannon", PLAN, mine.activities, myWeekTotals, myTotals, streak, myFitness),
-    [mine.activities, myWeekTotals, myTotals, streak, myFitness]
-  );
-  const owenInsight = useMemo(
-    () => buildWeeklyInsight("Owen", OWEN_PLAN, owen.activities, owenWeekTotals, owenTotals, owenStreak, owenFitness),
-    [owen.activities, owenWeekTotals, owenTotals, owenStreak, owenFitness]
-  );
-
-
   const badges = [
     { label: "Trailblazer 25%", min: 25 },
     { label: "Peak Bagger 50%", min: 50 },
@@ -462,13 +208,40 @@ export default function Page() {
     { label: "Kosci Ready 100%", min: 100 },
   ];
 
+  // ---- render a single session row's content (used inside both single & AM/PM combined rows) ----
+  function sessionContent(session: PlanSession, who: "mine" | "owen", idx: number, match?: MatchResult) {
+    const key = sid(who, session.date, idx);
+    const heading = distanceHeading(session);
+    const gymContent = session.type === "gymL" || session.type === "gymU" ? GYM_SESSIONS[session.type] : null;
+    return (
+      <div className="sess-content">
+        <div className="sesh">
+          {heading && <span className="dist-heading">{heading}</span>}
+          {session.label}
+          {match?.matched && <span className="source-tag strava">— from Strava: {match.matched.name}</span>}
+        </div>
+        {gymContent && (
+          <details className="gym-details">
+            <summary>Session details</summary>
+            <ul className="gym-list">
+              {gymContent.map((ex) => (
+                <li key={ex}>{ex}</li>
+              ))}
+            </ul>
+          </details>
+        )}
+      </div>
+    );
+  }
+
   // ---- shared renderer for a plan tab (My Plan / Owen's Plan) ----
   function renderPlanBody(
     plan: PlanPhase[],
     who: "mine" | "owen",
     results: ReturnType<typeof buildResults>,
     activePhase: string,
-    setActivePhase: (id: string) => void
+    setActivePhase: (id: string) => void,
+    bonus: BonusActivity[]
   ) {
     return (
       <div>
@@ -499,44 +272,82 @@ export default function Page() {
               const wResult = results.filter((r) => r.weekId === week.id);
               const wDone = wResult.filter((r) => r.match.detected).length;
               const wPct = wResult.length ? Math.round((wDone / wResult.length) * 100) : 0;
-              const wKmTarget = weeklyRunKmTarget(week);
+
+              // group sessions by date for AM/PM combining
+              const byDate: Record<string, { session: PlanSession; idx: number }[]> = {};
+              week.sessions.forEach((session, idx) => {
+                if (!byDate[session.date]) byDate[session.date] = [];
+                byDate[session.date].push({ session, idx });
+              });
+
               return (
                 <div className="week" key={week.id}>
                   <div className="week-head">
                     <div>
                       <span className="wk">{week.label}</span>
                       <span className="dates">{week.dateRange}</span>
-                      {wKmTarget > 0 && <span className="wk-km-target">{wKmTarget}km running target</span>}
+                      {week.weeklyKmGoal && <span className="km-goal">Target: {week.weeklyKmGoal}km running</span>}
                     </div>
                     <div className="week-head-right">
                       <div className="week-bar"><i style={{ width: `${wPct}%` }} /></div>
                       <div className="week-pct">{wPct}%</div>
                     </div>
                   </div>
-                  {week.sessions.map((session, idx) => {
-                    const key = sid(who, session.date, idx);
-                    const found = results.find((r) => r.key === key);
-                    const match = found?.match;
-                    const isDone = match?.detected;
-                    const manualToggle = !!match && !match.autoDetectable;
-                    const { title, metric } = sessionTitle(session);
-                    return (
-                      <div className={`row ${isDone ? "done" : ""}`} key={key}>
-                        <div
-                          className={`chk ${isDone ? "on" : ""} ${manualToggle ? "manual" : ""}`}
-                          onClick={() => manualToggle && toggleManual(key)}
-                        >
-                          <svg viewBox="0 0 12 12"><polyline points="1,6 4.5,10 11,2" /></svg>
-                        </div>
-                        <div className="row-text">
-                          <div className="day" style={{ ["--tag-color" as any]: TAG_COLORS[session.type] }}>
-                            {new Date(session.date + "T00:00:00").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short" })}
+
+                  {Object.entries(byDate).map(([date, entries]) => {
+                    const dayLabel = new Date(date + "T00:00:00").toLocaleDateString("en-AU", {
+                      weekday: "short", day: "numeric", month: "short",
+                    });
+
+                    if (entries.length === 1) {
+                      const { session, idx } = entries[0];
+                      const key = sid(who, session.date, idx);
+                      const found = results.find((r) => r.key === key);
+                      const match = found?.match;
+                      const isDone = match?.detected;
+                      const manualToggle = !!match && !match.autoDetectable && session.type !== "rest";
+                      return (
+                        <div className={`row ${isDone ? "done" : ""}`} key={date}>
+                          <div
+                            className={`chk ${isDone ? "on" : ""} ${manualToggle ? "manual" : ""}`}
+                            onClick={() => manualToggle && toggleManual(key)}
+                          >
+                            <svg viewBox="0 0 12 12"><polyline points="1,6 4.5,10 11,2" /></svg>
                           </div>
-                          <div className="sesh">
-                            <span className="sesh-title">{title}</span>
-                            {metric && <span className="sesh-metric">{metric}</span>}
-                            <InfoTooltip text={session.label} />
-                            {match?.matched && <span className="source-tag strava">— from Strava: {match.matched.name}</span>}
+                          <div className="row-text">
+                            <div className="day" style={{ ["--tag-color" as any]: TAG_COLORS[session.type] }}>{dayLabel}</div>
+                            {sessionContent(session, who, idx, match)}
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    // two sessions same day — AM/PM combined row
+                    return (
+                      <div className="row ampm-row" key={date}>
+                        <div className="row-text">
+                          <div className="day">{dayLabel}</div>
+                          <div className="ampm-grid">
+                            {entries.map(({ session, idx }) => {
+                              const key = sid(who, session.date, idx);
+                              const found = results.find((r) => r.key === key);
+                              const match = found?.match;
+                              const isDone = match?.detected;
+                              const manualToggle = !!match && !match.autoDetectable && session.type !== "rest";
+                              return (
+                                <div className={`ampm-col ${isDone ? "done" : ""}`} key={key}>
+                                  <div className="ampm-head">
+                                    <div
+                                      className={`chk small ${isDone ? "on" : ""} ${manualToggle ? "manual" : ""}`}
+                                      onClick={() => manualToggle && toggleManual(key)}
+                                    >
+                                      <svg viewBox="0 0 12 12"><polyline points="1,6 4.5,10 11,2" /></svg>
+                                    </div>
+                                  </div>
+                                  {sessionContent(session, who, idx, match)}
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
                       </div>
@@ -547,6 +358,22 @@ export default function Page() {
             })}
           </div>
         ))}
+
+        {bonus.length > 0 && (
+          <div className="bonus-panel">
+            <div className="bonus-title">Bonus sessions synced from Strava</div>
+            <p className="bonus-note">Not in the plan, but they still count — logged automatically when they showed up.</p>
+            {bonus.map((b) => (
+              <div className="row done bonus-row" key={b.activity.id}>
+                <div className="chk on"><svg viewBox="0 0 12 12"><polyline points="1,6 4.5,10 11,2" /></svg></div>
+                <div className="row-text">
+                  <div className="day">{new Date(b.date + "T00:00:00").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short" })}</div>
+                  <div className="sesh">{b.activity.name} <span className="bonus-badge">+5 bonus</span></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     );
   }
@@ -571,7 +398,7 @@ export default function Page() {
     if (authState === "connected") {
       return (
         <div className="connect-banner">
-          <p>Connected to {label}&apos;s Strava. Stairmaster, gym upper/lower, and travel/cross-training days aren&apos;t reliably detectable — those stay tap-to-confirm.</p>
+          <p>Connected to {label}&apos;s Strava. Runs, rides, swims, strength (gym), and stairmaster (StairStepper) all auto-detect. Rest and travel/cross-training days stay tap-to-confirm.</p>
           <a className="btn secondary" href={`/api/auth/logout?who=${who}`}>Disconnect</a>
         </div>
       );
@@ -579,259 +406,190 @@ export default function Page() {
     return null;
   }
 
-  const headerTotals = activeTab === "owen" ? owenTotals : myTotals;
-
   return (
     <div className="wrap">
       <header>
         <div className="eyebrow">Ultra training / 24 Aug → 27 Nov 2026</div>
         <h1>Kosci100 Dashboard</h1>
         <div className="sub">Synced with Strava — auto-detected sessions tick themselves off.</div>
+
+        <div className="big-progress">
+          <div className="big-progress-track">
+            <div className="big-progress-fill" style={{ width: `${myTotals.pct}%` }} />
+            <span className="big-progress-label">{myTotals.pct}% complete · {daysToRace} days to race</span>
+          </div>
+        </div>
+
         <div className="stats">
-          <div className="stat"><div className="n">{headerTotals.pct}%</div><div className="l">Complete</div></div>
-          <div className="stat"><div className="n">{headerTotals.done}</div><div className="l">Sessions done</div></div>
-          <div className="stat"><div className="n">{headerTotals.total}</div><div className="l">Total sessions</div></div>
+          <div className="stat"><div className="n">{myTotals.pct}%</div><div className="l">Complete</div></div>
+          <div className="stat"><div className="n">{myTotals.done}</div><div className="l">Sessions done</div></div>
+          <div className="stat"><div className="n">{myTotals.total}</div><div className="l">Total sessions</div></div>
           <div className="stat"><div className="n">{daysToRace}</div><div className="l">Days to race</div></div>
         </div>
       </header>
 
       <div className="tabbar">
-        <button className={activeTab === "weekly" ? "active" : ""} onClick={() => setActiveTab("weekly")}>Head to Head</button>
-        <button className={activeTab === "myplan" ? "active" : ""} onClick={() => setActiveTab("myplan")}>Shannon&apos;s Plan</button>
+        <button className={activeTab === "myplan" ? "active" : ""} onClick={() => setActiveTab("myplan")}>My Plan</button>
+        <button className={activeTab === "weekly" ? "active" : ""} onClick={() => setActiveTab("weekly")}>Weekly Totals</button>
         <button className={activeTab === "owen" ? "active" : ""} onClick={() => setActiveTab("owen")}>Owen&apos;s Plan</button>
         <button className={activeTab === "bingo" ? "active" : ""} onClick={() => setActiveTab("bingo")}>Bingo Card</button>
-        <button className={activeTab === "settings" ? "active" : ""} onClick={() => setActiveTab("settings")}>Settings</button>
       </div>
 
       {activeTab === "myplan" && (
         <div>
-          <div className="radar-card">
-            <div className="radar-head">
-              <span className="radar-title">Confidence radar</span>
-              <span className="radar-score">{myConfidence}%</span>
-            </div>
-            <ConfidenceRadar data={myRadar} color="var(--moss)" />
-            <p className="radar-caption">Commitment to the plan by training category, based on Strava-synced + confirmed sessions.</p>
-          </div>
-
-          <div className="keynote" style={{ marginBottom: 12 }}>
-            <b>Plan rationale:</b> built around mild trochanteric bursitis and lateral glute med tendinopathy —
-            gym work avoids adduction past midline, deep hip flexion + internal rotation, and direct trochanter
-            compression, rotating hip-safe strength (trap bar deadlift, hip thrust, single-leg RDL, step-ups)
-            with anti-rotation core on upper days.
-          </div>
-          <div className="keynote" style={{ marginBottom: 20 }}>
-            <b>This week:</b> {myInsight}
-          </div>
-
-          {renderPlanBody(PLAN, "mine", myResults, myActivePhase, setMyActivePhase)}
+          {connectBanner("mine", mine.authState, "your")}
+          {renderPlanBody(PLAN, "mine", myResults, myActivePhase, setMyActivePhase, myBonus)}
           <footer>
-            <div><b>Note:</b> if a week feels flat or overly sore, drop the stairmaster or a gym session before the long run. Stairmaster and gym upper/lower are tap-to-confirm since Strava can&apos;t reliably tell them apart.</div>
-          </footer>
-        </div>
-      )}
-
-      {activeTab === "owen" && (
-        <div>
-          <div className="radar-card">
-            <div className="radar-head">
-              <span className="radar-title">Confidence radar</span>
-              <span className="radar-score">{owenConfidence}%</span>
-            </div>
-            <ConfidenceRadar data={owenRadar} color="var(--amber)" />
-            <p className="radar-caption">Commitment to the plan by training category, based on Strava-synced + confirmed sessions.</p>
-          </div>
-
-          <div className="keynote" style={{ marginBottom: 12 }}>
-            <b>Plan rationale:</b> trail cadence sits around 138–156spm against 168–172spm on the road, a downhill
-            efficiency gap. Plan adds weekly downhill cadence work, back-to-back weekend long runs, a vert/altitude
-            block in Queenstown, and a race-simulation day to rehearse sub-15 pacing.
-          </div>
-          <div className="keynote" style={{ marginBottom: 20 }}>
-            <b>This week:</b> {owenInsight}
-          </div>
-
-          {renderPlanBody(OWEN_PLAN, "owen", owenResults, owenActivePhase, setOwenActivePhase)}
-          <footer>
-            <div><b>Note:</b> if a week feels flat or overly sore, drop the stairmaster or a gym session before the long run. Stairmaster and gym upper/lower are tap-to-confirm since Strava can&apos;t reliably tell them apart.</div>
+            <div><b>Note:</b> if a week feels flat or overly sore, drop the stairmaster or a gym session before the long run.</div>
           </footer>
         </div>
       )}
 
       {activeTab === "weekly" && (
         <div>
-          <div className="scoreboard-head">
-            <div className={`score-block ${myLikelihood >= owenLikelihood ? "leader" : ""}`}>
-              <div className="score-block-name">Shannon</div>
-              <div className="score-block-n">{myLikelihood}%</div>
-              <div className="score-block-l">likely on track for sub-15h</div>
-            </div>
-            <div className="score-block-vs">VS</div>
-            <div className={`score-block ${owenLikelihood >= myLikelihood ? "leader" : ""}`}>
-              <div className="score-block-name">Owen</div>
-              <div className="score-block-n">{owen.authState === "connected" ? `${owenLikelihood}%` : "—"}</div>
-              <div className="score-block-l">likely on track for sub-15h</div>
-            </div>
+          <div className="score-cards">
+            <div className="score-card"><div className="n">{myTotals.earnedPoints}</div><div className="l">Points</div></div>
+            <div className="score-card"><div className="n">{streak}</div><div className="l">Week streak</div></div>
+            <div className="score-card"><div className="n">{weeksDone}</div><div className="l">Weeks 100%</div></div>
           </div>
-          {owen.authState !== "connected" && (
-            <div className="vs-note">Owen hasn&apos;t connected his Strava yet — head to his tab to link it and this scoreboard fills in for real.</div>
-          )}
-          <p className="scoreboard-caption">
-            A directional estimate, not a guarantee — blends plan completion (40%), category balance from the
-            confidence radar (20%), and Strava-reported weekly volume, 14-day vert, longest run, and average pace (40%).
-          </p>
-
-          <div className="metric-grid">
-            <MetricTile
-              label="Plan complete"
-              mineVal={`${myTotals.pct}%`} minePct={myTotals.pct}
-              owenVal={`${owenTotals.pct}%`} owenPct={owenTotals.pct}
-            />
-            <MetricTile
-              label="Sessions done"
-              mineVal={`${myTotals.done}/${myTotals.total}`} minePct={myTotals.total ? (myTotals.done / myTotals.total) * 100 : 0}
-              owenVal={`${owenTotals.done}/${owenTotals.total}`} owenPct={owenTotals.total ? (owenTotals.done / owenTotals.total) * 100 : 0}
-            />
-            <MetricTile
-              label="Week streak"
-              mineVal={`${streak}`} minePct={myWeekTotals.length ? (streak / myWeekTotals.length) * 100 : 0}
-              owenVal={`${owenStreak}`} owenPct={owenWeekTotals.length ? (owenStreak / owenWeekTotals.length) * 100 : 0}
-            />
-            <MetricTile
-              label="Weeks at 100%"
-              mineVal={`${weeksDone}`} minePct={myWeekTotals.length ? (weeksDone / myWeekTotals.length) * 100 : 0}
-              owenVal={`${owenWeeksDone}`} owenPct={owenWeekTotals.length ? (owenWeeksDone / owenWeekTotals.length) * 100 : 0}
-            />
-            <MetricTile
-              label="Confidence radar avg"
-              mineVal={`${myConfidence}%`} minePct={myConfidence}
-              owenVal={`${owenConfidence}%`} owenPct={owenConfidence}
-            />
-            <MetricTile
-              label="Weekly volume (Strava)"
-              mineVal={myFitness.hasData ? `${myFitness.weeklyKm.toFixed(1)}km` : "—"} minePct={Math.min(100, (myFitness.weeklyKm / 55) * 100)}
-              owenVal={owenFitness.hasData ? `${owenFitness.weeklyKm.toFixed(1)}km` : "—"} owenPct={Math.min(100, (owenFitness.weeklyKm / 55) * 100)}
-            />
-            <MetricTile
-              label="Vert, last 14d (Strava)"
-              mineVal={myFitness.hasData ? `${Math.round(myFitness.elevGain14)}m` : "—"} minePct={Math.min(100, (myFitness.elevGain14 / 1200) * 100)}
-              owenVal={owenFitness.hasData ? `${Math.round(owenFitness.elevGain14)}m` : "—"} owenPct={Math.min(100, (owenFitness.elevGain14 / 1200) * 100)}
-            />
-            <MetricTile
-              label="Longest run (Strava)"
-              mineVal={myFitness.hasData ? `${myFitness.longestKm.toFixed(1)}km` : "—"} minePct={Math.min(100, (myFitness.longestKm / 35) * 100)}
-              owenVal={owenFitness.hasData ? `${owenFitness.longestKm.toFixed(1)}km` : "—"} owenPct={Math.min(100, (owenFitness.longestKm / 35) * 100)}
-            />
-            <MetricTile
-              label="Avg pace (Strava)"
-              mineVal={myFitness.avgPace ? `${myFitness.avgPace.toFixed(2)}/km` : "—"} minePct={myFitness.avgPace ? Math.min(100, (7.5 / myFitness.avgPace) * 100) : 0}
-              owenVal={owenFitness.avgPace ? `${owenFitness.avgPace.toFixed(2)}/km` : "—"} owenPct={owenFitness.avgPace ? Math.min(100, (7.5 / owenFitness.avgPace) * 100) : 0}
-            />
-            <MetricTile
-              label="Points"
-              mineVal={`${myTotals.earnedPoints}`} minePct={Math.max(myTotals.earnedPoints, owenTotals.earnedPoints, 1) > 0 ? (myTotals.earnedPoints / Math.max(myTotals.earnedPoints, owenTotals.earnedPoints, 1)) * 100 : 0}
-              owenVal={`${owenTotals.earnedPoints}`} owenPct={Math.max(myTotals.earnedPoints, owenTotals.earnedPoints, 1) > 0 ? (owenTotals.earnedPoints / Math.max(myTotals.earnedPoints, owenTotals.earnedPoints, 1)) * 100 : 0}
-            />
+          <div className="badge-row">
+            {badges.map((b) => (
+              <span key={b.label} className={`badge ${myTotals.pct >= b.min ? "earned" : ""}`}>
+                {myTotals.pct >= b.min ? "\u2713 " : ""}{b.label}
+              </span>
+            ))}
           </div>
 
-          <div className="radar-compare">
-            <div className="radar-card">
-              <div className="radar-head"><span className="radar-title">Shannon</span><span className="radar-score">{myConfidence}%</span></div>
-              <ConfidenceRadar data={myRadar} color="var(--moss)" size={180} />
+          <div className="vs-card">
+            <div className="vs-title">Head to head</div>
+            <div className="vs-row">
+              <div className="vs-name">You</div>
+              <div className="vs-bar-track"><div className="vs-bar mine" style={{ width: `${myTotals.pct}%` }} /></div>
+              <div className="vs-pct">{myTotals.pct}%</div>
             </div>
-            <div className="radar-card">
-              <div className="radar-head"><span className="radar-title">Owen</span><span className="radar-score">{owenConfidence}%</span></div>
-              <ConfidenceRadar data={owenRadar} color="var(--amber)" size={180} />
+            <div className="vs-row">
+              <div className="vs-name">Owen</div>
+              <div className="vs-bar-track"><div className="vs-bar owen" style={{ width: `${owenTotals.pct}%` }} /></div>
+              <div className="vs-pct">{owen.authState === "connected" ? `${owenTotals.pct}%` : "—"}</div>
             </div>
+            {owen.authState !== "connected" && (
+              <div className="vs-note">Owen hasn&apos;t connected his Strava yet — head to his tab to link it and this fills in for real.</div>
+            )}
           </div>
+
+          <table className="totals-table">
+            <thead><tr><th>Week</th><th>Dates</th><th>Sessions</th><th>Progress</th><th>Points</th></tr></thead>
+            <tbody>
+              {myWeekTotals.map((w) => {
+                const pct = w.total ? Math.round((w.done / w.total) * 100) : 0;
+                return (
+                  <tr key={w.label}>
+                    <td>{w.label}</td>
+                    <td style={{ color: "var(--text-dim)", fontSize: 11 }}>{w.dateRange}</td>
+                    <td>{w.done}/{w.total}</td>
+                    <td><span className="tbar"><i style={{ width: `${pct}%` }} /></span>{pct}%</td>
+                    <td style={{ color: "var(--gold-text)", fontWeight: 700 }}>{w.points}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {activeTab === "owen" && (
+        <div>
+          {connectBanner("owen", owen.authState, "Owen")}
+
+          <div className="stats" style={{ marginBottom: 18 }}>
+            <div className="stat"><div className="n">106.5k</div><div className="l">Kosci100</div></div>
+            <div className="stat"><div className="n">{daysToRace}</div><div className="l">Days to race</div></div>
+            <div className="stat"><div className="n">sub-15</div><div className="l">Goal</div></div>
+            <div className="stat"><div className="n">Fri 27 Nov</div><div className="l">Race day</div></div>
+          </div>
+
+          <div className="keynote" style={{ marginBottom: 20 }}>
+            <b>Coach&apos;s read on Owen&apos;s Strava data:</b> ~55–65km weeks with two solid trail long runs already
+            (25km/898m, 23km/357m) plus a 32km/942m effort — a genuinely good base. Trail cadence sits around
+            138–156spm against 168–172spm on the road, confirming a downhill efficiency gap. No back-to-back
+            long days on tired legs yet, which matters more than one big run for a 100k finish. This plan adds:
+            weekly downhill cadence work, back-to-back weekend long runs from Week 2, a dedicated vert/altitude
+            block in Queenstown, a full-distance-adjacent long run (South Boundary Rd, ~43.8km) as the main
+            fitness checkpoint, and a race simulation day in Peak Volume to rehearse sub-15 pacing directly.
+          </div>
+
+          {renderPlanBody(OWEN_PLAN, "owen", owenResults, owenActivePhase, setOwenActivePhase, owenBonus)}
         </div>
       )}
 
       {activeTab === "bingo" && (
         <div>
+          {!bingoShared && (
+            <div className="connect-banner">
+              <p>Shared storage isn&apos;t configured yet, so ticks only save on this device until Upstash is set up (see README).</p>
+            </div>
+          )}
+
           <div className="connect-banner">
             <p>Tapping as:</p>
             <div style={{ display: "flex", gap: 8 }}>
-              <button
-                className="who-toggle-btn"
-                style={whoAmI === "mine" ? { background: "var(--moss-ink)", borderColor: "var(--moss-ink)", color: "#fff" } : { background: "transparent", borderColor: "var(--line)", color: "var(--text-dim)" }}
-                onClick={() => setWhoAmI("mine")}
-              >
-                Shannon
-              </button>
-              <button
-                className="who-toggle-btn"
-                style={whoAmI === "owen" ? { background: "var(--amber-ink)", borderColor: "var(--amber-ink)", color: "#fff" } : { background: "transparent", borderColor: "var(--line)", color: "var(--text-dim)" }}
-                onClick={() => setWhoAmI("owen")}
-              >
-                Owen
-              </button>
+              <button className={whoAmI === "mine" ? "btn" : "btn secondary"} onClick={() => setWhoAmI("mine")}>Me</button>
+              <button className={whoAmI === "owen" ? "btn" : "btn secondary"} onClick={() => setWhoAmI("owen")}>Owen</button>
             </div>
           </div>
 
           {bingo && (
             <div className="score-cards">
               <div className="score-card">
-                <div className="n" style={{ color: "var(--moss-ink)" }}>{bingo.mine.filter(Boolean).length}/25</div>
-                <div className="l">Shannon&apos;s squares</div>
+                <div className="n">{bingo.mine.filter(Boolean).length}/25</div>
+                <div className="l">Your squares</div>
               </div>
               <div className="score-card">
-                <div className="n" style={{ color: "var(--amber-ink)" }}>{bingo.owen.filter(Boolean).length}/25</div>
+                <div className="n">{bingo.owen.filter(Boolean).length}/25</div>
                 <div className="l">Owen&apos;s squares</div>
               </div>
               <div className="score-card">
                 <div className="n">{countCompletedLines(bingo.mine)} / {countCompletedLines(bingo.owen)}</div>
-                <div className="l">Lines: Shannon / Owen</div>
+                <div className="l">Lines: you / Owen</div>
               </div>
             </div>
           )}
 
           {bingo && countCompletedLines(bingo[whoAmI]) > 0 && (
-            <div className="bingo-celebrate">
-              🎉 BINGO — {countCompletedLines(bingo[whoAmI])} line{countCompletedLines(bingo[whoAmI]) > 1 ? "s" : ""} complete
+            <div className="badge-row">
+              <span className="badge earned">🎉 BINGO — {countCompletedLines(bingo[whoAmI])} line{countCompletedLines(bingo[whoAmI]) > 1 ? "s" : ""} complete</span>
             </div>
           )}
 
-          <div className="bingo-grid">
+          <div className="bingo-grid" style={{ maxWidth: 520 }}>
             {BINGO_SQUARES.map((label, i) => {
               const isFree = i === FREE_INDEX;
               const myTick = bingo?.mine[i];
               const owenTick = bingo?.owen[i];
-              let cellClass = "bingo-cell";
-              if (isFree) cellClass += " free";
-              else if (myTick && owenTick) cellClass += " ticked-both";
-              else if (myTick) cellClass += " ticked-mine";
-              else if (owenTick) cellClass += " ticked-owen";
               return (
-                <div key={i} className={cellClass} onClick={() => toggleBingoCell(i)}>
-                  <div className="cell-label">{isFree ? "FREE" : label}</div>
+                <div
+                  key={i}
+                  className={`bingo-cell ${isFree ? "free" : ""}`}
+                  style={{
+                    display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+                    padding: 4, textAlign: "center", cursor: isFree ? "default" : "pointer",
+                  }}
+                  onClick={() => toggleBingoCell(i)}
+                >
+                  <div style={{ fontSize: 9, lineHeight: 1.2, fontWeight: 700 }}>{label}</div>
+                  {!isFree && (
+                    <div className="bingo-dot-row">
+                      <span className={`bingo-dot mine ${myTick ? "on" : ""}`}>Me</span>
+                      <span className={`bingo-dot owen ${owenTick ? "on" : ""}`}>Owen</span>
+                    </div>
+                  )}
                 </div>
               );
             })}
           </div>
-          <p style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 16, lineHeight: 1.6, textAlign: "center" }}>
-            Coral = Shannon&apos;s tick, red-orange = Owen&apos;s, split = both. Tap a square to toggle it for whoever you&apos;re tapping as above.
+          <p style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 14, lineHeight: 1.6 }}>
+            Green = your tick, purple = Owen&apos;s. Tap a square to toggle it for whoever you&apos;re tapping as above.
           </p>
-        </div>
-      )}
-
-      {activeTab === "settings" && (
-        <div>
-          <h2 style={{ marginBottom: 12 }}>Strava connections</h2>
-          {connectBanner("mine", mine.authState, "Shannon")}
-          {connectBanner("owen", owen.authState, "Owen")}
-
-          <h2 style={{ marginTop: 24, marginBottom: 12 }}>Shared storage</h2>
-          {!bingoShared && (
-            <div className="connect-banner">
-              <p>Shared storage isn&apos;t configured yet, so bingo ticks only save on this device until Upstash is set up (see README).</p>
-            </div>
-          )}
-          {bingoShared && (
-            <div className="connect-banner">
-              <p>Shared storage is connected — bingo ticks sync between devices.</p>
-            </div>
-          )}
         </div>
       )}
     </div>

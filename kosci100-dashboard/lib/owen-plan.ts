@@ -244,7 +244,7 @@ export const OWEN_PLAN: PlanPhase[] = [
     id: "op7",
     name: "Race Week",
     range: "23 – 27 Nov",
-    note: "Minimal volume, maximum readiness. Short shakeouts only — the work is already banked. Shared sub-15h target with Shannon — target moving time ~14:30, splits from a 7:47am start: CP1 16.2km ~10:03am · CP2 40.3km (via Kosci summit) ~1:37pm · CP3 50.1km ~2:55pm · CP4 62.3km ~4:35pm · CP5 74.9km ~5:56pm (top of the big descent) · CP6 82.5km ~6:42pm (valley flat — fastest km of the day) · CP7 93.9km ~8:19pm · WP 104km ~9:55pm · Finish ~10:33pm. That's ~14h46m with aid stops — a buffer of roughly 14min under cutoff. Bank time on the CP4→CP5 descent and the CP5→CP6 flat, not on the two climbs bookending the Kosci summit.",
+    note: "Minimal volume, maximum readiness. Short shakeouts only — the work is already banked.",
     weeks: [
       {
         id: "ow14",
