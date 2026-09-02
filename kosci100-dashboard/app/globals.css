@@ -87,6 +87,12 @@ nav.phasenav button.active{color:var(--ink);background:var(--moss);border-color:
 .chk.manual{cursor:pointer;}
 .chk svg{width:12px;height:12px;stroke:var(--ink);stroke-width:3;fill:none;opacity:0;}
 .chk.on svg{opacity:1;}
+
+/* rest days: neither "done" nor "missed" - a neutral marker, not a checkbox */
+.chk.rest-marker{cursor:default;background:var(--bg-row);border-color:var(--line);}
+.rest-dash{font-size:13px;font-weight:800;color:var(--text-dim);line-height:1;}
+.row.rest-row,.ampm-col.rest-row{opacity:.65;}
+.row.rest-row .sesh,.ampm-col.rest-row .sesh{text-decoration:none;font-style:italic;}
 .row-text{flex:1;}
 .day{font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--tag-color,var(--text-dim));margin-bottom:3px;}
 .sesh{font-size:14.5px;line-height:1.4;font-weight:600;}
@@ -103,9 +109,30 @@ footer b{color:var(--text);}
 .score-card .n{font-size:30px;font-weight:800;color:var(--ink);line-height:1;}
 .score-card .l{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink);opacity:.6;margin-top:6px;}
 
+/* head-to-head confidence banner */
+.confidence-banner{display:flex;align-items:center;gap:14px;background:var(--bg-panel);border:1px solid var(--line);border-radius:16px;padding:14px 18px;margin-bottom:20px;flex-wrap:wrap;}
+.confidence-pill{flex:0 0 auto;font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:7px 14px;border-radius:20px;}
+.confidence-pill.good{background:var(--moss);color:var(--moss-text);}
+.confidence-pill.ok{background:var(--gold);color:var(--gold-text);}
+.confidence-pill.warn{background:var(--ice);color:var(--ice-text);}
+.confidence-text{flex:1;min-width:200px;font-size:13px;font-weight:600;color:var(--text-dim);}
+
 .badge-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:26px;}
 .badge{font-size:11px;font-weight:700;letter-spacing:.02em;padding:7px 12px;border-radius:20px;border:1px solid var(--line);color:var(--text-dim);background:var(--bg-panel);}
 .badge.earned{color:var(--ink);background:var(--moss);border-color:var(--moss);}
+
+/* head-to-head comparison cards (plan completion + km logged) */
+.vs-card{background:var(--bg-panel);border:1px solid var(--line);border-radius:20px;padding:18px 20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.04);}
+.vs-title{font-size:13px;font-weight:800;letter-spacing:.02em;margin-bottom:14px;color:var(--text);}
+.vs-row{display:flex;align-items:center;gap:12px;margin-bottom:10px;}
+.vs-row:last-of-type{margin-bottom:0;}
+.vs-name{flex:0 0 52px;font-size:12.5px;font-weight:700;color:var(--text-dim);}
+.vs-bar-track{flex:1;height:14px;background:var(--bg-row);border-radius:10px;overflow:hidden;}
+.vs-bar{display:block;height:100%;border-radius:10px;transition:width .4s ease;}
+.vs-bar.mine{background:var(--moss);}
+.vs-bar.owen{background:var(--ice);}
+.vs-pct{flex:0 0 52px;text-align:right;font-size:13px;font-weight:800;color:var(--text);}
+.vs-note{margin-top:10px;font-size:11.5px;color:var(--text-dim);font-weight:500;}
 
 .totals-table{width:100%;border-collapse:collapse;font-size:13.5px;}
 .totals-table th{text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-dim);padding:8px 10px;border-bottom:1px solid var(--line);}
