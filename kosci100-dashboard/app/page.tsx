@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { PLAN, POINTS, PlanPhase, PlanSession, GYM_SESSIONS } from "@/lib/plan";
+import { PLAN, POINTS, PlanPhase, PlanWeek, PlanSession, SessionType, GYM_SESSIONS } from "@/lib/plan";
 import { OWEN_PLAN } from "@/lib/owen-plan";
 import { matchSession, findBonusActivities, StravaActivity, MatchResult, BonusActivity } from "@/lib/match";
 import { BINGO_SQUARES, FREE_INDEX, countCompletedLines, defaultTicks } from "@/lib/bingo";
@@ -72,18 +72,115 @@ const LOGGED_SPORT_TYPES = new Set([
   "Run", "TrailRun", "VirtualRide", "Ride", "Swim", "WeightTraining", "StairStepper",
 ]);
 
-function kmLoggedFor(activities: StravaActivity[] | null): number {
+// Running-only (no bike/swim/gym) — used for the "km run" and "avg pace"
+// scoreboard stats, which should reflect actual running, not cross-training.
+const RUNNING_SPORT_TYPES = new Set(["Run", "TrailRun"]);
+
+function runningStatsFor(activities: StravaActivity[] | null) {
+  const acts = (activities || []).filter((a) => RUNNING_SPORT_TYPES.has(a.sport_type));
+  return {
+    km: acts.reduce((s, a) => s + (a.distance || 0), 0) / 1000,
+    movingSec: acts.reduce((s, a) => s + (a.moving_time || 0), 0),
+  };
+}
+
+function formatPace(km: number, movingSec: number): string {
+  if (km < 0.1 || movingSec <= 0) return "—";
+  const secPerKm = movingSec / km;
+  const min = Math.floor(secPerKm / 60);
+  const sec = Math.round(secPerKm % 60);
+  return `${min}:${sec.toString().padStart(2, "0")}/km`;
+}
+
+function hoursTrainedFor(activities: StravaActivity[] | null): number {
   if (!activities) return 0;
   return (
     activities
       .filter((a) => LOGGED_SPORT_TYPES.has(a.sport_type))
-      .reduce((s, a) => s + (a.distance || 0), 0) / 1000
+      .reduce((s, a) => s + (a.moving_time || 0), 0) / 3600
   );
 }
 
-function kmBarPct(a: number, b: number) {
-  const max = Math.max(a, b, 1);
-  return Math.round((a / max) * 100);
+function elevationFor(activities: StravaActivity[] | null): number {
+  if (!activities) return 0;
+  return activities
+    .filter((a) => LOGGED_SPORT_TYPES.has(a.sport_type))
+    .reduce((s, a) => s + (a.total_elevation_gain || 0), 0);
+}
+
+// ---- points breakdown by training category, for the head-to-head scoreboard ----
+const POINT_CATEGORY_DEFS: { label: string; types: SessionType[] }[] = [
+  { label: "Long", types: ["long"] },
+  { label: "Run", types: ["run"] },
+  { label: "Gym", types: ["gymL", "gymU"] },
+  { label: "Stair", types: ["stair"] },
+  { label: "Bike", types: ["bike"] },
+  { label: "Swim", types: ["swim"] },
+  { label: "Race", types: ["race"] },
+  { label: "Other", types: ["other"] },
+];
+
+function categoryPointsFor(results: { session: PlanSession; match: MatchResult }[], types: SessionType[]) {
+  let earned = 0, total = 0;
+  results.forEach(({ session, match }) => {
+    if (!types.includes(session.type)) return;
+    total += POINTS[session.type];
+    if (match.detected) earned += POINTS[session.type];
+  });
+  return { earned, total, pct: total ? Math.round((earned / total) * 100) : 0 };
+}
+
+function pointsBreakdownFor(
+  myResults: { session: PlanSession; match: MatchResult }[],
+  owenResults: { session: PlanSession; match: MatchResult }[]
+) {
+  return POINT_CATEGORY_DEFS.map((def) => ({
+    label: def.label,
+    mine: categoryPointsFor(myResults, def.types),
+    owen: categoryPointsFor(owenResults, def.types),
+  })).filter((row) => row.mine.total > 0 || row.owen.total > 0);
+}
+
+// ---- "this week" + "weeks led" helpers, matched by chronological index ----
+function weekEndDate(week: PlanWeek): string | undefined {
+  const dates = week.sessions.map((s) => s.date).sort();
+  return dates[dates.length - 1];
+}
+
+function currentWeekFor(plan: PlanPhase[], todayStr: string): { id: string } | null {
+  const weeks = plan
+    .flatMap((p) => p.weeks)
+    .map((w) => ({ id: w.id, start: w.sessions.map((s) => s.date).sort()[0], end: weekEndDate(w) }))
+    .filter((w) => w.start && w.end) as { id: string; start: string; end: string }[];
+  const current = weeks.find((w) => todayStr >= w.start && todayStr <= w.end);
+  if (current) return current;
+  const upcoming = weeks.find((w) => w.start > todayStr);
+  if (upcoming) return upcoming;
+  return weeks[weeks.length - 1] || null;
+}
+
+function weeksLedTally(
+  myPlan: PlanPhase[],
+  myWeekTotals: { done: number; total: number }[],
+  owenPlan: PlanPhase[],
+  owenWeekTotals: { done: number; total: number }[],
+  todayStr: string
+) {
+  const myWeeks = myPlan.flatMap((p) => p.weeks);
+  const count = Math.min(myWeeks.length, myWeekTotals.length, owenWeekTotals.length);
+  let mine = 0, owen = 0, scored = 0;
+  for (let i = 0; i < count; i++) {
+    const end = weekEndDate(myWeeks[i]);
+    if (!end || end > todayStr) continue; // week hasn't finished yet
+    const m = myWeekTotals[i], o = owenWeekTotals[i];
+    if (m.total === 0 && o.total === 0) continue;
+    scored++;
+    const mPct = m.total ? m.done / m.total : 0;
+    const oPct = o.total ? o.done / o.total : 0;
+    if (mPct > oPct) mine++;
+    else if (oPct > mPct) owen++;
+  }
+  return { mine, owen, scored };
 }
 
 // How you're tracking against the plan's own timeline: of everything
@@ -213,8 +310,6 @@ export default function Page() {
   const myTotals = useMemo(() => totalsFor(myResults), [myResults]);
   const owenTotals = useMemo(() => totalsFor(owenResults), [owenResults]);
 
-  const myKm = useMemo(() => kmLoggedFor(mine.activities), [mine.activities]);
-  const owenKm = useMemo(() => kmLoggedFor(owen.activities), [owen.activities]);
   const myPace = useMemo(() => paceStatus(myResults), [myResults]);
   const myConfidence = useMemo(() => confidenceFor(myTotals.pct, myPace.diff), [myTotals.pct, myPace.diff]);
 
@@ -225,10 +320,10 @@ export default function Page() {
   }, []);
 
   function weekTotalsFor(plan: PlanPhase[], results: ReturnType<typeof buildResults>) {
-    const byWeek: Record<string, { label: string; dateRange: string; done: number; total: number; points: number }> = {};
+    const byWeek: Record<string, { id: string; label: string; dateRange: string; done: number; total: number; points: number }> = {};
     plan.forEach((phase) => {
       phase.weeks.forEach((week) => {
-        byWeek[week.id] = { label: week.label, dateRange: week.dateRange, done: 0, total: 0, points: 0 };
+        byWeek[week.id] = { id: week.id, label: week.label, dateRange: week.dateRange, done: 0, total: 0, points: 0 };
       });
     });
     results.forEach(({ session, weekId, match }) => {
@@ -243,23 +338,41 @@ export default function Page() {
   }
 
   const myWeekTotals = useMemo(() => weekTotalsFor(PLAN, myResults), [myResults]);
+  const owenWeekTotals = useMemo(() => weekTotalsFor(OWEN_PLAN, owenResults), [owenResults]);
 
-  const streak = useMemo(() => {
-    let s = 0;
-    for (const w of myWeekTotals) {
-      if (w.total > 0 && w.done === w.total) s++;
-      else break;
-    }
-    return s;
-  }, [myWeekTotals]);
-  const weeksDone = myWeekTotals.filter((w) => w.total > 0 && w.done === w.total).length;
+  const owenConnected = owen.authState === "connected";
+  const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
-  const badges = [
-    { label: "Trailblazer 25%", min: 25 },
-    { label: "Peak Bagger 50%", min: 50 },
-    { label: "Summit Push 75%", min: 75 },
-    { label: "Kosci Ready 100%", min: 100 },
-  ];
+  const myHours = useMemo(() => hoursTrainedFor(mine.activities), [mine.activities]);
+  const owenHours = useMemo(() => hoursTrainedFor(owen.activities), [owen.activities]);
+  const myRunning = useMemo(() => runningStatsFor(mine.activities), [mine.activities]);
+  const owenRunning = useMemo(() => runningStatsFor(owen.activities), [owen.activities]);
+  const myElevation = useMemo(() => elevationFor(mine.activities), [mine.activities]);
+  const owenElevation = useMemo(() => elevationFor(owen.activities), [owen.activities]);
+
+  const pointsBreakdown = useMemo(
+    () => pointsBreakdownFor(myResults, owenResults),
+    [myResults, owenResults]
+  );
+
+  const myCurrentWeekId = useMemo(() => currentWeekFor(PLAN, todayStr)?.id, [todayStr]);
+  const owenCurrentWeekId = useMemo(() => currentWeekFor(OWEN_PLAN, todayStr)?.id, [todayStr]);
+  const myThisWeek = useMemo(
+    () => myWeekTotals.find((w) => w.id === myCurrentWeekId) || null,
+    [myWeekTotals, myCurrentWeekId]
+  );
+  const owenThisWeek = useMemo(
+    () => owenWeekTotals.find((w) => w.id === owenCurrentWeekId) || null,
+    [owenWeekTotals, owenCurrentWeekId]
+  );
+
+  const weeksLed = useMemo(
+    () => weeksLedTally(PLAN, myWeekTotals, OWEN_PLAN, owenWeekTotals, todayStr),
+    [myWeekTotals, owenWeekTotals, todayStr]
+  );
+
+  const iAmLeading = owenConnected && myTotals.pct >= owenTotals.pct;
+  const owenLeading = owenConnected && owenTotals.pct > myTotals.pct;
 
   // ---- render a single session row's content (used inside both single & AM/PM combined rows) ----
   function sessionContent(session: PlanSession, who: "mine" | "owen", idx: number, match?: MatchResult) {
@@ -510,49 +623,97 @@ export default function Page() {
             </div>
           </div>
 
-          <div className="score-cards">
-            <div className="score-card"><div className="n">{myTotals.earnedPoints}</div><div className="l">Points</div></div>
-            <div className="score-card"><div className="n">{streak}</div><div className="l">Week streak</div></div>
-            <div className="score-card"><div className="n">{weeksDone}</div><div className="l">Weeks 100%</div></div>
-          </div>
-          <div className="badge-row">
-            {badges.map((b) => (
-              <span key={b.label} className={`badge ${myTotals.pct >= b.min ? "earned" : ""}`}>
-                {myTotals.pct >= b.min ? "\u2713 " : ""}{b.label}
-              </span>
-            ))}
-          </div>
+          <div className="scoreboard-card">
+            <div className="scoreboard-cols">
+              <div className="scoreboard-col">
+                <div className="scoreboard-name">
+                  {iAmLeading && (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="var(--gold-text)" stroke="none"><path d="M3 8l4 3 5-6 5 6 4-3-2 11H5L3 8z" /></svg>
+                  )}
+                  <span>Shannon</span>
+                </div>
+                <div className="scoreboard-pct mine">{myTotals.pct}%</div>
+                <div className="scoreboard-label">Plan adherence</div>
+                <div className="scoreboard-bar"><div className="scoreboard-bar-fill mine" style={{ width: `${myTotals.pct}%` }} /></div>
+                <div className="scoreboard-stats">
+                  <div className="scoreboard-stat"><span>Sessions done</span><span>{myTotals.done}</span></div>
+                  <div className="scoreboard-stat"><span>Hours trained</span><span>{myHours.toFixed(1)}h</span></div>
+                  <div className="scoreboard-stat"><span>Km run</span><span>{Math.round(myRunning.km)}km</span></div>
+                  <div className="scoreboard-stat"><span>Elevation</span><span>{Math.round(myElevation).toLocaleString()}m</span></div>
+                  <div className="scoreboard-stat last"><span>Avg run pace</span><span>{formatPace(myRunning.km, myRunning.movingSec)}</span></div>
+                </div>
+              </div>
 
-          <div className="vs-card">
-            <div className="vs-title">Head to head — plan completion</div>
-            <div className="vs-row">
-              <div className="vs-name">You</div>
-              <div className="vs-bar-track"><div className="vs-bar mine" style={{ width: `${myTotals.pct}%` }} /></div>
-              <div className="vs-pct">{myTotals.pct}%</div>
+              <div className="scoreboard-col owen">
+                <div className="scoreboard-name">
+                  {owenLeading && (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="var(--gold-text)" stroke="none"><path d="M3 8l4 3 5-6 5 6 4-3-2 11H5L3 8z" /></svg>
+                  )}
+                  <span>Owen</span>
+                </div>
+                <div className="scoreboard-pct owen">{owenConnected ? `${owenTotals.pct}%` : "—"}</div>
+                <div className="scoreboard-label">Plan adherence</div>
+                <div className="scoreboard-bar"><div className="scoreboard-bar-fill owen" style={{ width: `${owenConnected ? owenTotals.pct : 0}%` }} /></div>
+                <div className="scoreboard-stats">
+                  <div className="scoreboard-stat"><span>Sessions done</span><span>{owenConnected ? owenTotals.done : "—"}</span></div>
+                  <div className="scoreboard-stat"><span>Hours trained</span><span>{owenConnected ? `${owenHours.toFixed(1)}h` : "—"}</span></div>
+                  <div className="scoreboard-stat"><span>Km run</span><span>{owenConnected ? `${Math.round(owenRunning.km)}km` : "—"}</span></div>
+                  <div className="scoreboard-stat"><span>Elevation</span><span>{owenConnected ? `${Math.round(owenElevation).toLocaleString()}m` : "—"}</span></div>
+                  <div className="scoreboard-stat last"><span>Avg run pace</span><span>{owenConnected ? formatPace(owenRunning.km, owenRunning.movingSec) : "—"}</span></div>
+                </div>
+              </div>
             </div>
-            <div className="vs-row">
-              <div className="vs-name">Owen</div>
-              <div className="vs-bar-track"><div className="vs-bar owen" style={{ width: `${owenTotals.pct}%` }} /></div>
-              <div className="vs-pct">{owen.authState === "connected" ? `${owenTotals.pct}%` : "—"}</div>
-            </div>
-            {owen.authState !== "connected" && (
-              <div className="vs-note">Owen hasn&apos;t connected his Strava yet — head to his tab to link it and this fills in for real.</div>
+            <div className="scoreboard-vs">VS</div>
+            {!owenConnected && (
+              <div className="vs-note center">Owen hasn&apos;t connected his Strava yet — head to his tab to link it and this fills in for real.</div>
             )}
           </div>
 
-          <div className="vs-card">
-            <div className="vs-title">Head to head — km logged</div>
-            <div className="vs-row">
-              <div className="vs-name">You</div>
-              <div className="vs-bar-track"><div className="vs-bar mine" style={{ width: `${kmBarPct(myKm, owenKm)}%` }} /></div>
-              <div className="vs-pct">{Math.round(myKm)}km</div>
+          <div className="breakdown-card">
+            <div className="breakdown-head">
+              <div className="breakdown-title">Points breakdown</div>
+              <div className="breakdown-total"><span className="mine">{myTotals.earnedPoints}</span> <span className="vs-word">vs</span> <span className="owen">{owenConnected ? owenTotals.earnedPoints : "—"}</span></div>
             </div>
-            <div className="vs-row">
-              <div className="vs-name">Owen</div>
-              <div className="vs-bar-track"><div className="vs-bar owen" style={{ width: `${kmBarPct(owenKm, myKm)}%` }} /></div>
-              <div className="vs-pct">{owen.authState === "connected" ? `${Math.round(owenKm)}km` : "—"}</div>
-            </div>
+            {pointsBreakdown.map((row) => (
+              <div className="breakdown-row" key={row.label}>
+                <div className="breakdown-label">{row.label}</div>
+                <div className="breakdown-bars">
+                  <div className="breakdown-bar mine" style={{ width: `${row.mine.pct}%` }}>{row.mine.earned > 0 && row.mine.earned}</div>
+                  <div className="breakdown-bar owen" style={{ width: `${owenConnected ? row.owen.pct : 0}%` }}>{owenConnected && row.owen.earned > 0 && row.owen.earned}</div>
+                </div>
+              </div>
+            ))}
           </div>
+
+          {myThisWeek && (
+            <div className="thisweek-card">
+              <div className="thisweek-title">This week</div>
+              <div className="thisweek-row">
+                <div className="thisweek-name">Shannon</div>
+                <div className="thisweek-track"><div className="thisweek-fill mine" style={{ width: `${myThisWeek.total ? (myThisWeek.done / myThisWeek.total) * 100 : 0}%` }} /></div>
+                <div className="thisweek-frac">{myThisWeek.done}/{myThisWeek.total}</div>
+              </div>
+              <div className="thisweek-row">
+                <div className="thisweek-name">Owen</div>
+                <div className="thisweek-track"><div className="thisweek-fill owen" style={{ width: `${owenConnected && owenThisWeek?.total ? (owenThisWeek.done / owenThisWeek.total) * 100 : 0}%` }} /></div>
+                <div className="thisweek-frac">{owenConnected && owenThisWeek ? `${owenThisWeek.done}/${owenThisWeek.total}` : "—"}</div>
+              </div>
+            </div>
+          )}
+
+          {owenConnected && (
+            <div className="weeksled-card">
+              <div className="weeksled-side">
+                <div className="weeksled-n mine">{weeksLed.mine}</div>
+                <div className="weeksled-l">weeks led — Shannon</div>
+              </div>
+              <div className="weeksled-mid">out of {weeksLed.scored} scored so far</div>
+              <div className="weeksled-side">
+                <div className="weeksled-n owen">{weeksLed.owen}</div>
+                <div className="weeksled-l">weeks led — Owen</div>
+              </div>
+            </div>
+          )}
 
           <table className="totals-table">
             <thead><tr><th>Week</th><th>Dates</th><th>Sessions</th><th>Progress</th><th>Points</th></tr></thead>
@@ -620,7 +781,7 @@ export default function Page() {
           <div className="connect-banner">
             <p>Tapping as:</p>
             <div style={{ display: "flex", gap: 8 }}>
-              <button className={whoAmI === "mine" ? "btn" : "btn secondary"} onClick={() => setWhoAmI("mine")}>Me</button>
+              <button className={whoAmI === "mine" ? "btn" : "btn secondary"} onClick={() => setWhoAmI("mine")}>Shannon</button>
               <button className={whoAmI === "owen" ? "btn" : "btn secondary"} onClick={() => setWhoAmI("owen")}>Owen</button>
             </div>
           </div>
@@ -666,7 +827,7 @@ export default function Page() {
                   <div style={{ fontSize: 9, lineHeight: 1.2, fontWeight: 700 }}>{label}</div>
                   {!isFree && (
                     <div className="bingo-dot-row">
-                      <span className={`bingo-dot mine ${myTick ? "on" : ""}`}>Me</span>
+                      <span className={`bingo-dot mine ${myTick ? "on" : ""}`}>Shannon</span>
                       <span className={`bingo-dot owen ${owenTick ? "on" : ""}`}>Owen</span>
                     </div>
                   )}
