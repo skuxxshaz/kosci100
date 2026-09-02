@@ -65,12 +65,58 @@ function distanceHeading(session: PlanSession): string | null {
   return null;
 }
 
+// Sport types that count toward "km logged" bragging rights - deliberately
+// the same set match.ts auto-detects against the plan, so a stray Strava
+// "Walk" or "Yoga" activity doesn't skew the head-to-head number.
+const LOGGED_SPORT_TYPES = new Set([
+  "Run", "TrailRun", "VirtualRide", "Ride", "Swim", "WeightTraining", "StairStepper",
+]);
+
+function kmLoggedFor(activities: StravaActivity[] | null): number {
+  if (!activities) return 0;
+  return (
+    activities
+      .filter((a) => LOGGED_SPORT_TYPES.has(a.sport_type))
+      .reduce((s, a) => s + (a.distance || 0), 0) / 1000
+  );
+}
+
+function kmBarPct(a: number, b: number) {
+  const max = Math.max(a, b, 1);
+  return Math.round((a / max) * 100);
+}
+
+// How you're tracking against the plan's own timeline: of everything
+// scheduled up to today (rest days excluded), how much is actually done.
+function paceStatus(results: { session: PlanSession; match: MatchResult }[]) {
+  const today = new Date().toISOString().slice(0, 10);
+  let expected = 0, done = 0;
+  results.forEach(({ session, match }) => {
+    if (session.type === "rest") return;
+    if (session.date <= today) {
+      expected++;
+      if (match.detected) done++;
+    }
+  });
+  return { expected, done, diff: done - expected };
+}
+
+// A rough, gamified read on goal confidence - overall completion plus how
+// far ahead/behind schedule you are right now. Not a prediction, just a fun
+// competitive gauge.
+function confidenceFor(pct: number, diff: number): { label: string; tone: "good" | "ok" | "warn" } {
+  const score = pct + diff * 4;
+  if (score >= 85) return { label: "Strong", tone: "good" };
+  if (score >= 60) return { label: "On track", tone: "ok" };
+  return { label: "At risk", tone: "warn" };
+}
+
 export default function Page() {
   const mine = usePersonStrava("mine");
   const owen = usePersonStrava("owen");
 
   const [manual, setManual] = useState<Record<string, boolean>>({});
-  const [activeTab, setActiveTab] = useState<"myplan" | "weekly" | "owen" | "bingo">("myplan");
+  const [activeTab, setActiveTab] = useState<"myplan" | "weekly" | "owen" | "bingo">("weekly");
   const [myActivePhase, setMyActivePhase] = useState(PLAN[0].id);
   const [owenActivePhase, setOwenActivePhase] = useState(OWEN_PLAN[0].id);
 
@@ -153,6 +199,7 @@ export default function Page() {
   function totalsFor(results: ReturnType<typeof buildResults>) {
     let total = 0, done = 0, totalPoints = 0, earnedPoints = 0;
     results.forEach(({ session, match }) => {
+      if (session.type === "rest") return; // rest days aren't training - keep them out of the ratio entirely
       total++;
       totalPoints += POINTS[session.type];
       if (match.detected) {
@@ -165,6 +212,11 @@ export default function Page() {
 
   const myTotals = useMemo(() => totalsFor(myResults), [myResults]);
   const owenTotals = useMemo(() => totalsFor(owenResults), [owenResults]);
+
+  const myKm = useMemo(() => kmLoggedFor(mine.activities), [mine.activities]);
+  const owenKm = useMemo(() => kmLoggedFor(owen.activities), [owen.activities]);
+  const myPace = useMemo(() => paceStatus(myResults), [myResults]);
+  const myConfidence = useMemo(() => confidenceFor(myTotals.pct, myPace.diff), [myTotals.pct, myPace.diff]);
 
   const daysToRace = useMemo(() => {
     const race = new Date("2026-11-27T00:00:00");
@@ -180,6 +232,7 @@ export default function Page() {
       });
     });
     results.forEach(({ session, weekId, match }) => {
+      if (session.type === "rest") return; // rest days aren't training - keep them out of the ratio entirely
       byWeek[weekId].total++;
       if (match.detected) {
         byWeek[weekId].done++;
@@ -269,7 +322,7 @@ export default function Page() {
             <p className="phase-note">{phase.note}</p>
 
             {phase.weeks.map((week) => {
-              const wResult = results.filter((r) => r.weekId === week.id);
+              const wResult = results.filter((r) => r.weekId === week.id && r.session.type !== "rest");
               const wDone = wResult.filter((r) => r.match.detected).length;
               const wPct = wResult.length ? Math.round((wDone / wResult.length) * 100) : 0;
 
@@ -304,15 +357,20 @@ export default function Page() {
                       const key = sid(who, session.date, idx);
                       const found = results.find((r) => r.key === key);
                       const match = found?.match;
-                      const isDone = match?.detected;
-                      const manualToggle = !!match && !match.autoDetectable && session.type !== "rest";
+                      const isRest = session.type === "rest";
+                      const isDone = !isRest && match?.detected;
+                      const manualToggle = !!match && !match.autoDetectable && !isRest;
                       return (
-                        <div className={`row ${isDone ? "done" : ""}`} key={date}>
+                        <div className={`row ${isDone ? "done" : ""} ${isRest ? "rest-row" : ""}`} key={date}>
                           <div
-                            className={`chk ${isDone ? "on" : ""} ${manualToggle ? "manual" : ""}`}
+                            className={`chk ${isDone ? "on" : ""} ${manualToggle ? "manual" : ""} ${isRest ? "rest-marker" : ""}`}
                             onClick={() => manualToggle && toggleManual(key)}
                           >
-                            <svg viewBox="0 0 12 12"><polyline points="1,6 4.5,10 11,2" /></svg>
+                            {isRest ? (
+                              <span className="rest-dash">–</span>
+                            ) : (
+                              <svg viewBox="0 0 12 12"><polyline points="1,6 4.5,10 11,2" /></svg>
+                            )}
                           </div>
                           <div className="row-text">
                             <div className="day" style={{ ["--tag-color" as any]: TAG_COLORS[session.type] }}>{dayLabel}</div>
@@ -332,16 +390,21 @@ export default function Page() {
                               const key = sid(who, session.date, idx);
                               const found = results.find((r) => r.key === key);
                               const match = found?.match;
-                              const isDone = match?.detected;
-                              const manualToggle = !!match && !match.autoDetectable && session.type !== "rest";
+                              const isRest = session.type === "rest";
+                              const isDone = !isRest && match?.detected;
+                              const manualToggle = !!match && !match.autoDetectable && !isRest;
                               return (
-                                <div className={`ampm-col ${isDone ? "done" : ""}`} key={key}>
+                                <div className={`ampm-col ${isDone ? "done" : ""} ${isRest ? "rest-row" : ""}`} key={key}>
                                   <div className="ampm-head">
                                     <div
-                                      className={`chk small ${isDone ? "on" : ""} ${manualToggle ? "manual" : ""}`}
+                                      className={`chk small ${isDone ? "on" : ""} ${manualToggle ? "manual" : ""} ${isRest ? "rest-marker" : ""}`}
                                       onClick={() => manualToggle && toggleManual(key)}
                                     >
-                                      <svg viewBox="0 0 12 12"><polyline points="1,6 4.5,10 11,2" /></svg>
+                                      {isRest ? (
+                                        <span className="rest-dash">–</span>
+                                      ) : (
+                                        <svg viewBox="0 0 12 12"><polyline points="1,6 4.5,10 11,2" /></svg>
+                                      )}
                                     </div>
                                   </div>
                                   {sessionContent(session, who, idx, match)}
@@ -429,24 +492,24 @@ export default function Page() {
       </header>
 
       <div className="tabbar">
+        <button className={activeTab === "weekly" ? "active" : ""} onClick={() => setActiveTab("weekly")}>Head to Head</button>
         <button className={activeTab === "myplan" ? "active" : ""} onClick={() => setActiveTab("myplan")}>My Plan</button>
-        <button className={activeTab === "weekly" ? "active" : ""} onClick={() => setActiveTab("weekly")}>Weekly Totals</button>
         <button className={activeTab === "owen" ? "active" : ""} onClick={() => setActiveTab("owen")}>Owen&apos;s Plan</button>
         <button className={activeTab === "bingo" ? "active" : ""} onClick={() => setActiveTab("bingo")}>Bingo Card</button>
       </div>
 
-      {activeTab === "myplan" && (
-        <div>
-          {connectBanner("mine", mine.authState, "your")}
-          {renderPlanBody(PLAN, "mine", myResults, myActivePhase, setMyActivePhase, myBonus)}
-          <footer>
-            <div><b>Note:</b> if a week feels flat or overly sore, drop the stairmaster or a gym session before the long run.</div>
-          </footer>
-        </div>
-      )}
-
       {activeTab === "weekly" && (
         <div>
+          <div className="confidence-banner">
+            <div className={`confidence-pill ${myConfidence.tone}`}>{myConfidence.label}</div>
+            <div className="confidence-text">
+              {myPace.diff > 0 && `${myPace.diff} session${myPace.diff === 1 ? "" : "s"} ahead of schedule`}
+              {myPace.diff === 0 && "Right on pace with the plan"}
+              {myPace.diff < 0 && `${Math.abs(myPace.diff)} session${Math.abs(myPace.diff) === 1 ? "" : "s"} behind schedule`}
+              {" — confidence read on hitting your sub-15h goal at the current rate."}
+            </div>
+          </div>
+
           <div className="score-cards">
             <div className="score-card"><div className="n">{myTotals.earnedPoints}</div><div className="l">Points</div></div>
             <div className="score-card"><div className="n">{streak}</div><div className="l">Week streak</div></div>
@@ -461,7 +524,7 @@ export default function Page() {
           </div>
 
           <div className="vs-card">
-            <div className="vs-title">Head to head</div>
+            <div className="vs-title">Head to head — plan completion</div>
             <div className="vs-row">
               <div className="vs-name">You</div>
               <div className="vs-bar-track"><div className="vs-bar mine" style={{ width: `${myTotals.pct}%` }} /></div>
@@ -475,6 +538,20 @@ export default function Page() {
             {owen.authState !== "connected" && (
               <div className="vs-note">Owen hasn&apos;t connected his Strava yet — head to his tab to link it and this fills in for real.</div>
             )}
+          </div>
+
+          <div className="vs-card">
+            <div className="vs-title">Head to head — km logged</div>
+            <div className="vs-row">
+              <div className="vs-name">You</div>
+              <div className="vs-bar-track"><div className="vs-bar mine" style={{ width: `${kmBarPct(myKm, owenKm)}%` }} /></div>
+              <div className="vs-pct">{Math.round(myKm)}km</div>
+            </div>
+            <div className="vs-row">
+              <div className="vs-name">Owen</div>
+              <div className="vs-bar-track"><div className="vs-bar owen" style={{ width: `${kmBarPct(owenKm, myKm)}%` }} /></div>
+              <div className="vs-pct">{owen.authState === "connected" ? `${Math.round(owenKm)}km` : "—"}</div>
+            </div>
           </div>
 
           <table className="totals-table">
@@ -494,6 +571,16 @@ export default function Page() {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {activeTab === "myplan" && (
+        <div>
+          {connectBanner("mine", mine.authState, "your")}
+          {renderPlanBody(PLAN, "mine", myResults, myActivePhase, setMyActivePhase, myBonus)}
+          <footer>
+            <div><b>Note:</b> if a week feels flat or overly sore, drop the stairmaster or a gym session before the long run.</div>
+          </footer>
         </div>
       )}
 
